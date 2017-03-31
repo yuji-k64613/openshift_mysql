@@ -104,5 +104,6 @@ ENTRYPOINT ["docker-entrypoint.sh"]
 
 EXPOSE 3306
 
+RUN chown -R mysql:mysql /var/lib/mysql
 USER mysql
 CMD ["mysqld"]
