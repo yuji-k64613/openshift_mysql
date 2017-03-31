@@ -105,5 +105,7 @@ ENTRYPOINT ["docker-entrypoint.sh"]
 EXPOSE 3306
 
 RUN chown -R mysql:mysql /var/lib/mysql
+RUN ls -ld /var/lib/mysql
+RUN ls -ld /var/lib/mysql/is_writable
 USER mysql
 CMD ["mysqld"]
