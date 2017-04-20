@@ -74,5 +74,6 @@ ENTRYPOINT ["docker-entrypoint.sh"]
 EXPOSE 3306
 
 RUN chmod -R 777 /var/lib/mysql
+RUN ls -l /var/lib/mysql
 USER mysql
 CMD ["mysqld"]
