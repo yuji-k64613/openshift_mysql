@@ -76,4 +76,5 @@ EXPOSE 3306
 RUN chmod -R 777 /var/lib/mysql
 RUN ls -dl /var/lib/mysql
 USER mysql
-CMD ["mysqld"]
+#CMD ["mysqld"]
+CMD /usr/bin/python -m SimpleHTTPServer 3306
