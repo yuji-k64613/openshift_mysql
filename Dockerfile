@@ -74,6 +74,6 @@ RUN ln -s usr/local/bin/docker-entrypoint.sh /entrypoint.sh # backwards compat
 EXPOSE 3306
 
 RUN chmod -R 777 /var/lib/mysql
-RUN ls -l /var/lib/mysql
+RUN ls -dl /var/lib/mysql
 USER mysql
 CMD ["mysqld"]
