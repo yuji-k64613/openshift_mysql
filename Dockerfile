@@ -1,3 +1,4 @@
+# vim:set ft=dockerfile:
 FROM debian:jessie
 
 # add our user and group first to make sure their IDs get assigned consistently, regardless of whatever dependencies get added
@@ -19,42 +20,71 @@ RUN set -x \
 
 RUN mkdir /docker-entrypoint-initdb.d
 
+# install "pwgen" for randomizing passwords
+# install "apt-transport-https" for Percona's repo (switched to https-only)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-# for MYSQL_RANDOM_ROOT_PASSWORD
+		apt-transport-https ca-certificates \
 		pwgen \
-# for mysql_ssl_rsa_setup
-		openssl \
-# FATAL ERROR: please install the following Perl modules before executing /usr/local/mysql/scripts/mysql_install_db:
-# File::Basename
-# File::Copy
-# Sys::Hostname
-# Data::Dumper
-		perl \
 	&& rm -rf /var/lib/apt/lists/*
 
+ENV GPG_KEYS \
+# Key fingerprint = 1993 69E5 404B D5FC 7D2F  E43B CBCB 082A 1BB9 43DB
+# MariaDB Package Signing Key <package-signing-key@mariadb.org>
+	199369E5404BD5FC7D2FE43BCBCB082A1BB943DB \
+# pub   1024D/CD2EFD2A 2009-12-15
+#       Key fingerprint = 430B DF5C 56E7 C94E 848E  E60C 1C4C BDCD CD2E FD2A
+# uid                  Percona MySQL Development Team <mysql-dev@percona.com>
+# sub   2048g/2D607DAF 2009-12-15
+	430BDF5C56E7C94E848EE60C1C4CBDCDCD2EFD2A \
+# pub   4096R/8507EFA5 2016-06-30
+#       Key fingerprint = 4D1B B29D 63D9 8E42 2B21  13B1 9334 A25F 8507 EFA5
+# uid                  Percona MySQL Development Team (Packaging key) <mysql-dev@percona.com>
+# sub   4096R/4CAC6D72 2016-06-30
+	4D1BB29D63D98E422B2113B19334A25F8507EFA5
 RUN set -ex; \
-# gpg: key 5072E1F5: public key "MySQL Release Engineering <mysql-build@oss.oracle.com>" imported
-	key='A4A9406876FCBD3C456770C88C718D3B5072E1F5'; \
 	export GNUPGHOME="$(mktemp -d)"; \
-	gpg --keyserver ha.pool.sks-keyservers.net --recv-keys "$key"; \
-	gpg --export "$key" > /etc/apt/trusted.gpg.d/mysql.gpg; \
+	for key in $GPG_KEYS; do \
+		gpg --keyserver ha.pool.sks-keyservers.net --recv-keys "$key"; \
+	done; \
+	gpg --export $GPG_KEYS > /etc/apt/trusted.gpg.d/mariadb.gpg; \
 	rm -r "$GNUPGHOME"; \
-	apt-key list > /dev/null
+	apt-key list
 
-ENV MYSQL_MAJOR 8.0
-ENV MYSQL_VERSION 8.0.0-dmr-1debian8
+RUN echo "deb https://repo.percona.com/apt jessie main" > /etc/apt/sources.list.d/percona.list \
+	&& { \
+		echo 'Package: *'; \
+		echo 'Pin: release o=Percona Development Team'; \
+		echo 'Pin-Priority: 998'; \
+	} > /etc/apt/preferences.d/percona
 
-RUN echo "deb http://repo.mysql.com/apt/debian/ jessie mysql-${MYSQL_MAJOR}" > /etc/apt/sources.list.d/mysql.list
+ENV MARIADB_MAJOR 10.1
+ENV MARIADB_VERSION 10.1.23+maria-1~jessie
+
+RUN echo "deb http://ftp.osuosl.org/pub/mariadb/repo/$MARIADB_MAJOR/debian jessie main" > /etc/apt/sources.list.d/mariadb.list \
+	&& { \
+		echo 'Package: *'; \
+		echo 'Pin: release o=MariaDB'; \
+		echo 'Pin-Priority: 999'; \
+	} > /etc/apt/preferences.d/mariadb
+# add repository pinning to make sure dependencies from this MariaDB repo are preferred over Debian dependencies
+#  libmariadbclient18 : Depends: libmysqlclient18 (= 5.5.42+maria-1~wheezy) but 5.5.43-0+deb7u1 is to be installed
 
 # the "/var/lib/mysql" stuff here is because the mysql-server postinst doesn't have an explicit way to disable the mysql_install_db codepath besides having a database already "configured" (ie, stuff in /var/lib/mysql/mysql)
 # also, we set debconf keys to make APT a little quieter
 RUN { \
-		echo mysql-community-server mysql-community-server/data-dir select ''; \
-		echo mysql-community-server mysql-community-server/root-pass password ''; \
-		echo mysql-community-server mysql-community-server/re-root-pass password ''; \
-		echo mysql-community-server mysql-community-server/remove-test-db select false; \
+		echo mariadb-server-$MARIADB_MAJOR mysql-server/root_password password 'unused'; \
+		echo mariadb-server-$MARIADB_MAJOR mysql-server/root_password_again password 'unused'; \
 	} | debconf-set-selections \
-	&& apt-get update && apt-get install -y mysql-server="${MYSQL_VERSION}" && rm -rf /var/lib/apt/lists/* \
+	&& apt-get update \
+	&& apt-get install -y \
+		mariadb-server=$MARIADB_VERSION \
+# percona-xtrabackup is installed at the same time so that `mysql-common` is only installed once from just mariadb repos
+		percona-xtrabackup \
+		socat \
+	&& rm -rf /var/lib/apt/lists/* \
+# comment out any "user" entires in the MySQL config ("docker-entrypoint.sh" or "--user" will handle user switching)
+	&& sed -ri 's/^user\s/#&/' /etc/mysql/my.cnf /etc/mysql/conf.d/* \
+# purge and re-create /var/lib/mysql with appropriate ownership
 	&& rm -rf /var/lib/mysql && mkdir -p /var/lib/mysql /var/run/mysqld \
 	&& chown -R mysql:mysql /var/lib/mysql /var/run/mysqld \
 # ensure that /var/run/mysqld (used for socket and lock files) is writable regardless of the UID our mysqld instance ends up having at runtime
@@ -62,19 +92,15 @@ RUN { \
 
 # comment out a few problematic configuration values
 # don't reverse lookup hostnames, they are usually another container
-RUN sed -Ei 's/^(bind-address|log)/#&/' /etc/mysql/mysql.conf.d/mysqld.cnf \
-	&& echo '[mysqld]\nskip-host-cache\nskip-name-resolve' > /etc/mysql/conf.d/docker.cnf
+RUN sed -Ei 's/^(bind-address|log)/#&/' /etc/mysql/my.cnf \
+	&& echo 'skip-host-cache\nskip-name-resolve' | awk '{ print } $1 == "[mysqld]" && c == 0 { c = 1; system("cat") }' /etc/mysql/my.cnf > /tmp/my.cnf \
+	&& mv /tmp/my.cnf /etc/mysql/my.cnf
 
 VOLUME /var/lib/mysql
 
 COPY docker-entrypoint.sh /usr/local/bin/
-RUN ln -s usr/local/bin/docker-entrypoint.sh /entrypoint.sh # backwards compat
-#ENTRYPOINT ["docker-entrypoint.sh"]
+RUN ln -s usr/local/bin/docker-entrypoint.sh / # backwards compat
+ENTRYPOINT ["docker-entrypoint.sh"]
 
 EXPOSE 3306
-
-RUN find /var/lib/mysql
-RUN chmod -R 777 /var/lib/mysql
-RUN ls -dl /var/lib/mysql
-USER mysql
 CMD ["mysqld"]
